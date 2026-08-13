@@ -7,6 +7,7 @@ runnable echo-bot example.
 
 - `lib/` — the package sources (imported as `tgbot` via `package-dir` in pyproject): `core.py` (`Bot` class, `load_env`), `state.py` (authorized/subscribers JSON persistence under `out/`)
 - `examples/echo_bot/` — self-contained demo bot app (same layout as sibling apps like `fonds/`): `bot.py` + `handlers.py` with its own `config/`, `deploy/`, `Dockerfile`, `docker-compose.yml` — see its [README](examples/echo_bot/README.md)
+- `examples/page_bot/` — demo bot with a 🌐 Open page button that sends a self-contained HTML/JS page (`web/index.html`) as a document via `send_document()`: `bot.py` + `handlers.py` + `web/` — see its [README](examples/page_bot/README.md)
 - `tests/` — pytest suite, all network mocked (`python -m pytest tests/`)
 - `docs/` — [architecture](docs/ARCHITECTURE.md), [telegram setup](docs/TELEGRAM.md), [deploy](docs/DOCKER.md)
 
@@ -29,12 +30,13 @@ bot.run_forever(
 )
 ```
 
-Built into the package: password authorization (empty password = open access),
-`/start` `/help`, `/subscribe` `/unsubscribe` with 🔔/🔕 keyboard buttons,
-`"🤖 Bot started"` broadcast on startup, HTML sending chunked at 4000 chars,
-and the long-poll loop with error backoff. App logic is injected via the
-`commands` / `on_message` / `on_tick` callbacks — see the docstrings in
-`tgbot/core.py` and the full example in `examples/echo_bot/`.
+Built into the package: password authorization (empty password = open access;
+unauthorized chats see only a 🔑 Authorize button), `/start` `/help`,
+`/subscribe` `/unsubscribe` with 🔔/🔕 keyboard buttons, `send_document()` for
+file reports, `"🤖 Bot started"` broadcast on startup, HTML sending chunked at
+4000 chars, and the long-poll loop with error backoff. App logic is injected
+via the `commands` / `on_message` / `on_tick` callbacks — see the docstrings
+in `tgbot/core.py` and the full example in `examples/echo_bot/`.
 
 ## Run the echo example (Docker Compose)
 

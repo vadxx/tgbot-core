@@ -64,7 +64,12 @@ to `Bot(...)` and answers their presses via the `on_message` callback
 Set `BOT_PASSWORD` in `.env`. Every chat (private or group) must send the
 password once before any command works — authorized chats are remembered in
 `out/authorized.json`, so the password is only needed once (or again after a
-password change). If `BOT_PASSWORD` is unset, the bot is open to anyone.
+password change). Until a chat is authorized its reply keyboard shows only the
+**🔑 Authorize** button (tapping it just re-sends the password prompt); the
+full keyboard appears after authorization. Broadcasts (including the startup
+notice) and documents are only ever sent to authorized chats — a subscriber
+who has not passed the password receives nothing. If `BOT_PASSWORD` is unset,
+the bot is open to anyone and always shows the full keyboard.
 
 > **Privacy mode:** Telegram bots have privacy mode enabled by default. Slash
 > commands and inline keyboards always work. If you want reply-keyboard buttons

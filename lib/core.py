@@ -6,7 +6,8 @@ App logic is injected as callbacks — nothing app-specific is imported here:
     bot.run_forever(commands={"/check": on_check}, on_message=on_text)
 
 Built-ins handled by the package: password authorization, /start, /help,
-/subscribe, /unsubscribe (plus the 🔔/🔕 button labels).
+/subscribe, /unsubscribe (plus the 🔔/🔕 button labels). Chats that have not
+authorized yet see a keyboard with only the 🔑 Authorize button.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ import requests
 from . import state
 
 _TELEGRAM_HARD_LIMIT = 4000
+
+# The only button shown to chats that have not passed the password yet.
+AUTHORIZE_BUTTON = "🔑 Authorize"
 
 # Poll timing: Telegram holds a long-poll up to _POLL_TIMEOUT; the HTTP request
 # allows _REQUEST_TIMEOUT; _STALL_LIMIT is the hard cap after which a wedged
@@ -93,10 +97,21 @@ class Bot:
         rows = [list(row) for row in (keyboard_rows or [])]
         rows.append(["🔔 Subscribe", "🔕 Unsubscribe"])
         self._keyboard = {"keyboard": rows, "resize_keyboard": True}
+        self._keyboard_locked = {"keyboard": [[AUTHORIZE_BUTTON]], "resize_keyboard": True}
         self.subscribers = state.load_subscribers(self.out_dir)
         self.authorized = state.load_authorized(self.out_dir)
         self._offset = 0
         self._api_base = f"https://api.telegram.org/bot{token}"
+
+    def is_authorized(self, chat_id: str) -> bool:
+        """True if the chat passed the password (or no password is set)."""
+        return state.is_authorized(chat_id, self.authorized, self.password)
+
+    def _keyboard_for(self, chat_id: str) -> dict:
+        """Full keyboard for authorized chats; just the Authorize button otherwise."""
+        if self.is_authorized(chat_id):
+            return self._keyboard
+        return self._keyboard_locked
 
     def send(self, chat_id: str, text: str) -> None:
         """Send a message, split at Telegram's length limit, with the keyboard."""
@@ -105,7 +120,7 @@ class Bot:
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
-            "reply_markup": self._keyboard,
+            "reply_markup": self._keyboard_for(chat_id),
         }
         for i in range(0, len(text), _TELEGRAM_HARD_LIMIT):
             payload["text"] = text[i:i + _TELEGRAM_HARD_LIMIT]
@@ -113,9 +128,31 @@ class Bot:
             if not resp.ok:
                 print(f"Telegram send failed for chat {chat_id}: {resp.status_code} {resp.text[:200]}")
 
+    def send_document(self, chat_id: str, path: str | Path, caption: str = "") -> None:
+        """Send a file (e.g. an HTML report) via sendDocument.
+
+        Unlike send(), this refuses unauthorized chats: a document is always
+        content, never the password prompt."""
+        if not self.is_authorized(chat_id):
+            print(f"Refused to send document {path} to unauthorized chat {chat_id}")
+            return
+        url = f"{self._api_base}/sendDocument"
+        path = Path(path)
+        with open(path, "rb") as f:
+            resp = requests.post(
+                url,
+                data={"chat_id": chat_id, "caption": caption},
+                files={"document": (path.name, f)},
+                timeout=60,
+            )
+        if not resp.ok:
+            print(f"Telegram sendDocument failed for chat {chat_id}: {resp.status_code} {resp.text[:200]}")
+
     def broadcast(self, chat_ids: Iterable[str], text: str) -> None:
-        """Send a message to every chat, skipping chats that fail."""
+        """Send a message to every authorized chat, skipping chats that fail."""
         for chat_id in list(chat_ids):
+            if not self.is_authorized(chat_id):
+                continue
             try:
                 self.send(chat_id, text)
             except Exception as e:
