@@ -1,0 +1,10 @@
+services:
+  bot:
+    build:
+      context: ../..
+      dockerfile: examples/page_bot/Dockerfile
+    container_name: tgbot-page-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./out:/app/out

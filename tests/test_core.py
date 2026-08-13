@@ -147,6 +147,45 @@ def test_send_chunks_long_messages(monkeypatch, tmp_path):
     assert bot2._keyboard["keyboard"] == [["A", "B"], ["🔔 Subscribe", "🔕 Unsubscribe"]]
 
 
+def test_unauthorized_chat_sees_only_authorize_button(monkeypatch, tmp_path):
+    posts = []
+    monkeypatch.setattr("tgbot.core.requests.post", lambda url, json, timeout: posts.append(dict(json)) or _Resp())
+    bot = Bot(token="test", password="secret", out_dir=tmp_path, keyboard_rows=[["A", "B"]])
+    bot.send("123", "hi")
+    assert posts[0]["reply_markup"] == {"keyboard": [["🔑 Authorize"]], "resize_keyboard": True}
+    # after authorizing, the same chat gets the full keyboard
+    bot.authorized.add("123")
+    bot.send("123", "hi")
+    assert posts[1]["reply_markup"]["keyboard"] == [["A", "B"], ["🔔 Subscribe", "🔕 Unsubscribe"]]
+
+
+def test_open_access_bot_always_shows_full_keyboard(tmp_path):
+    bot = Bot(token="test", password="", out_dir=tmp_path, keyboard_rows=[["A"]])
+    assert bot._keyboard_for("stranger") is bot._keyboard
+
+
+def test_authorize_button_label_gets_lock_message(tmp_path):
+    bot = RecBot(token="test", password="secret", out_dir=tmp_path)
+    bot._handle_message(_msg("🔑 Authorize"))
+    assert bot.sent == [("123", "🔒 This bot is protected. Send the password to authorize.")]
+
+
+def test_send_document_posts_file(monkeypatch, tmp_path):
+    posts = []
+    monkeypatch.setattr(
+        "tgbot.core.requests.post",
+        lambda url, data, files, timeout: posts.append((url, dict(data), files["document"][0])) or _Resp(),
+    )
+    bot = Bot(token="test", out_dir=tmp_path)
+    report = tmp_path / "report.html"
+    report.write_text("<html></html>", encoding="utf-8")
+    bot.send_document("123", report, "caption text")
+    url, data, filename = posts[0]
+    assert url.endswith("/sendDocument")
+    assert data == {"chat_id": "123", "caption": "caption text"}
+    assert filename == "report.html"
+
+
 # --- state load/save ---
 
 
@@ -259,6 +298,29 @@ def test_non_ok_getupdates_is_logged(tmp_path, monkeypatch, capsys):
 # --- broadcast ---
 
 
+def test_broadcast_skips_unauthorized_chats(tmp_path):
+    """A subscriber who never passed the password must get nothing (e.g. the
+    auto-check results after a restart)."""
+    bot = RecBot(token="test", password="secret", out_dir=tmp_path)
+    bot.authorized.add("ok")
+    bot.broadcast(["ok", "stranger"], "results")
+    assert bot.sent == [("ok", "results")]
+
+
+def test_send_document_refuses_unauthorized_chat(tmp_path, monkeypatch, capsys):
+    posts = []
+    monkeypatch.setattr("tgbot.core.requests.post", lambda *a, **k: posts.append(k) or _Resp())
+    bot = Bot(token="test", password="secret", out_dir=tmp_path)
+    report = tmp_path / "report.html"
+    report.write_text("<html></html>", encoding="utf-8")
+    bot.send_document("stranger", report)
+    assert posts == []
+    assert "Refused to send document" in capsys.readouterr().out
+    bot.authorized.add("stranger")
+    bot.send_document("stranger", report)
+    assert len(posts) == 1
+
+
 def test_broadcast_sends_to_all_and_skips_failures(tmp_path, capsys):
     bot = RecBot(token="test", out_dir=tmp_path)
 
@@ -283,7 +345,7 @@ def test_startup_broadcasts_to_existing_subscribers(tmp_path, monkeypatch):
     bot = RecBot(token="test", out_dir=tmp_path)
     with pytest.raises(KeyboardInterrupt):
         bot.run_forever()
-    assert bot.sent == [("123", "🤖 Bot started"), ("456", "🤖 Bot started")]
+    assert sorted(bot.sent) == [("123", "🤖 Bot started"), ("456", "🤖 Bot started")]
 
 
 def test_no_startup_broadcast_without_subscribers(tmp_path, monkeypatch):

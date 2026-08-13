@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tgbot page demo</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #ffffff;
+      color: #222222;
+    }
+    h1 { font-size: 1.3rem; }
+    .card {
+      border: 1px solid #cccccc;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 16px 0;
+    }
+    .card dt { font-weight: 600; }
+    .card dd { margin: 0 0 8px; }
+    button {
+      display: block;
+      width: 100%;
+      margin: 8px 0;
+      padding: 12px;
+      font-size: 1rem;
+      border: none;
+      border-radius: 8px;
+      background: #3390ec;
+      color: #ffffff;
+      cursor: pointer;
+    }
+    #note { color: #888888; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>🌐 tgbot page demo</h1>
+  <p id="note">This HTML file was sent by the bot and opened in your browser.</p>
+
+  <dl class="card">
+    <dt>Browser</dt><dd id="browser">—</dd>
+    <dt>Page opened at</dt><dd id="opened">—</dd>
+  </dl>
+
+  <button id="btn-popup">💬 Show popup</button>
+  <button id="btn-time">🕐 What time is it?</button>
+
+  <script>
+    // Self-contained demo page: no external dependencies, works from a file:// URL.
+    const $ = (id) => document.getElementById(id);
+
+    $("browser").textContent = navigator.userAgent;
+    $("opened").textContent = new Date().toLocaleString();
+
+    $("btn-popup").onclick = () => alert("Hello from the web page 👋");
+    $("btn-time").onclick = () =>
+      $("opened").textContent = new Date().toLocaleString();
+  </script>
+</body>
+</html>
