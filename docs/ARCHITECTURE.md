@@ -25,14 +25,24 @@ Telegram API. No database — state lives in plain JSON files under `out/`.
 
 ## Components
 
-| Component | Responsibility |
-|---|---|
-| `lib/core.py` | `Bot` class: polling loop, message routing, message sending; `Bot.from_env()` constructor from `TELEGRAM_BOT_TOKEN`/`BOT_PASSWORD`; `load_env()` .env parser; `DEFAULT_HELP_TEXT` |
-| `lib/state.py` | Built-in command actions: authorization, subscribe/unsubscribe; owns the JSON-set persistence, parameterized by `out_dir` |
-| your app | Callbacks injected into `bot.run_forever()`: `commands` (command/button label → handler), `on_message` (free-text fallback), `on_tick` (once per poll pass). See `examples/echo_bot/` |
-| `out/` | Runtime state: `subscribers.json` (broadcast recipients), `authorized.json` (chats that passed `BOT_PASSWORD`) |
-| `.env` | Secrets and tuning, never committed; `config/.env.example` documents the variables |
-| `examples/echo_bot/Dockerfile` / `docker-compose.yml` | Containerized run of the echo example, see [DOCKER.md](DOCKER.md); `examples/echo_bot/deploy/` holds the flat variants used for release packing |
+- **`lib/core.py`** — `Bot` class: polling loop, message routing, sending;
+  `Bot.from_env()` from `TELEGRAM_BOT_TOKEN`/`BOT_PASSWORD`; `load_env()` .env
+  parser; `DEFAULT_HELP_TEXT`
+- **`lib/state.py`** — built-in command actions (authorization,
+  subscribe/unsubscribe); owns JSON-set persistence, parameterized by `out_dir`
+- **your app** — callbacks injected into `bot.run_forever()`: `commands`
+  (lowercased command/button label → handler; overrides the built-in
+  subscribe/unsubscribe), `on_message` (free-text fallback), `on_tick` (once
+  per poll pass), `on_start_payload` (`/start <payload>` deep links). See
+  `examples/echo_bot/`
+- **`out/`** — runtime state: `subscribers.json` (broadcast recipients; apps
+  can keep extra named lists), `authorized.json` (chats that passed
+  `BOT_PASSWORD`)
+- **`.env`** — secrets and tuning, never committed; each example's
+  `config/.env.example` documents the variables
+- **`examples/echo_bot/Dockerfile` / `docker-compose.yml`** — containerized run
+  of the echo example, see [DOCKER.md](DOCKER.md); `examples/echo_bot/deploy/`
+  holds the flat variants used for release packing
 
 ## Configuration
 
@@ -43,7 +53,7 @@ source (environment variables win if both are set):
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | yes | Bot token from @BotFather |
 | `BOT_PASSWORD` | no | If set, users must send it once to authorize |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | no | Proxy for Telegram API traffic (SOCKS5 needs `pip install requests[socks]`) |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | no | Telegram proxy; SOCKS5 needs `requests[socks]` |
 
 ## Runtime behavior
 
@@ -53,19 +63,22 @@ source (environment variables win if both are set):
    hard 60 s cap: a wedged connection is abandoned and retried on a fresh one;
    after 5 consecutive stalls `run_forever()` returns 1 so a container restart
    policy can recover the bot. Failed (non-OK) polls are logged.
-2. Each message is routed: built-in commands (`/start`, `/help`, `/subscribe`,
-   `/unsubscribe` and their buttons) are handled by the package; a registered
-   `commands` key (after `@BotName` stripping) calls its handler; everything
-   else goes to `on_message(text, chat_id, bot)`.
+2. Each message is routed in order: `/start`/`/help` (a `/start <payload>`
+   deep link goes to `on_start_payload`, and the command message is deleted);
+   then a registered `commands` key (lowercased, after `@BotName` stripping)
+   calls its handler; then the built-in `/subscribe`/`/unsubscribe` and their
+   🔔/🔕 buttons; everything else goes to `on_message(text, chat_id, bot)`.
 3. Replies are sent with HTML parse mode, split at Telegram's length limit.
-4. If `BOT_PASSWORD` is set, every chat must send the password once; authorized
-   chats are remembered in `out/authorized.json` (until the password changes).
+4. If `BOT_PASSWORD` is set, every chat must send the password once (the
+   password message is deleted afterwards); authorized chats are remembered in
+   `out/authorized.json` (until the password changes).
 
 ## Extending the bot
 
-Don't edit the package for app behavior — inject it: pass `keyboard_rows` and
-`help_text` to `Bot(...)`, and `commands` / `on_message` / `on_tick` to
-`run_forever()`. `examples/echo_bot/` shows the pattern end to end.
+Don't edit the package for app behavior — inject it: pass `keyboard_rows` (or
+`keyboard_provider` for per-chat keyboards) and `help_text` to `Bot(...)`, and
+`commands` / `on_message` / `on_tick` / `on_start_payload` to `run_forever()`.
+`examples/echo_bot/` shows the pattern end to end.
 
 ## Design constraints to keep
 

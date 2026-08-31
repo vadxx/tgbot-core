@@ -2,19 +2,16 @@
 
 ## Hosting requirements
 
-- **Outbound HTTPS access to `api.telegram.org:443`** — the bot polls Telegram,
-  so the host must be able to reach the Telegram API. No inbound ports, public
-  IP, or domain name are needed (polling, not webhooks), so the bot works
-  behind NAT and firewalls that allow outbound traffic. If the host's network
-  blocks Telegram (common in some regions), host on a VPS abroad or route
-  through a proxy — see [If Telegram is blocked](#if-telegram-is-blocked).
-- **Docker with the Compose plugin** — the only software requirement on the
-  host (`docker compose version` should work). Without Docker, a plain
-  Python 3.12 + `pip install -e .` works too.
-- **Minimal resources** — the bot is a single small Python process; ~50 MB RAM
-  and negligible CPU/disk are enough. Any cheap VPS or always-on machine will do.
-- **Persistent `./out` directory** — mounted into the container; don't delete it
-  or the bot forgets subscribers and authorized chats.
+- **Outbound HTTPS to `api.telegram.org:443`** — polling, not webhooks: no
+  inbound ports, public IP or domain needed; works behind NAT. If the network
+  blocks Telegram, host on a VPS abroad or use a proxy — see
+  [If Telegram is blocked](#if-telegram-is-blocked).
+- **Docker with the Compose plugin** — `docker compose version` should work.
+  Without Docker, plain Python 3.12 + `pip install -e .` works too.
+- **Minimal resources** — one small Python process; ~50 MB RAM, negligible
+  CPU/disk. Any cheap VPS or always-on machine will do.
+- **Persistent `./out` directory** — mounted into the container; deleting it
+  makes the bot forget subscribers and authorized chats.
 
 Quick check from the host before deploying:
 

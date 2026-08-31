@@ -2,10 +2,12 @@
 
 App logic is injected as callbacks — nothing app-specific is imported here:
 
-    bot = Bot(token, password, keyboard_rows=[["🔍 Check now"]])
-    bot.run_forever(commands={"/check": on_check}, on_message=on_text)
+    bot = Bot(token, password, keyboard_rows=[["⏰ Server time"]])
+    bot.run_forever(commands={"/time": on_time}, on_message=on_text)
 
-Built-ins handled by the package: password authorization, /start, /help,
+Built-ins handled by the package: password authorization, /start (including
+the `/start <payload>` deep-link form via on_start_payload — the command
+message itself is deleted to keep the chat clean), /help,
 /subscribe, /unsubscribe (plus the 🔔/🔕 button labels). Chats that have not
 authorized yet see a keyboard with only the 🔑 Authorize button.
 """
@@ -47,6 +49,7 @@ DEFAULT_HELP_TEXT = (
 OnMessage = Callable[[str, str, "Bot"], None]
 CommandHandler = Callable[[str, "Bot"], None]
 OnTick = Callable[["Bot"], None]
+OnStartPayload = Callable[[str, str, "Bot"], None]  # (payload, chat_id, bot)
 
 
 def load_env(path: str = ".env") -> None:
@@ -60,7 +63,13 @@ def load_env(path: str = ".env") -> None:
                 continue
             key, _, val = line.partition("=")
             key = key.strip()
-            val = val.split("#", 1)[0].strip().strip("\"'")
+            val = val.strip()
+            # Quoted values keep everything (even "#"); unquoted values treat
+            # " #" as an inline comment, so passwords may contain "#".
+            if len(val) >= 2 and val[0] in "\"'" and val[-1] == val[0]:
+                val = val[1:-1]
+            else:
+                val = val.split(" #", 1)[0].strip()
             if key and key not in os.environ:
                 os.environ[key] = val
 
@@ -84,6 +93,7 @@ class Bot:
         password: str = "",
         out_dir: str | Path = "out",
         keyboard_rows: list[list[str]] | None = None,
+        keyboard_provider: Callable[[str], list[list[str]]] | None = None,
         help_text: str = DEFAULT_HELP_TEXT,
         subscribe_reply: str = "✅ You are subscribed to broadcasts.",
         unsubscribe_reply: str = "✅ You are unsubscribed from broadcasts.",
@@ -91,6 +101,7 @@ class Bot:
         self.token = token
         self.password = password
         self.out_dir = Path(out_dir)
+        self.keyboard_provider = keyboard_provider
         self.help_text = help_text
         self.subscribe_reply = subscribe_reply
         self.unsubscribe_reply = unsubscribe_reply
@@ -108,10 +119,15 @@ class Bot:
         return state.is_authorized(chat_id, self.authorized, self.password)
 
     def _keyboard_for(self, chat_id: str) -> dict:
-        """Full keyboard for authorized chats; just the Authorize button otherwise."""
-        if self.is_authorized(chat_id):
-            return self._keyboard
-        return self._keyboard_locked
+        """Full keyboard for authorized chats; just the Authorize button otherwise.
+
+        When a keyboard_provider is set, authorized chats get whatever rows it
+        returns (e.g. a source picker before a source is chosen)."""
+        if not self.is_authorized(chat_id):
+            return self._keyboard_locked
+        if self.keyboard_provider is not None:
+            return {"keyboard": self.keyboard_provider(chat_id), "resize_keyboard": True}
+        return self._keyboard
 
     def send(self, chat_id: str, text: str) -> None:
         """Send a message, split at Telegram's length limit, with the keyboard."""
@@ -158,6 +174,29 @@ class Bot:
             except Exception as e:
                 print(f"  Failed to send to {chat_id}: {e}")
 
+    def delete_message(self, chat_id: str, message_id: int) -> None:
+        """Best-effort deleteMessage; failures are logged and ignored."""
+        try:
+            resp = requests.post(
+                f"{self._api_base}/deleteMessage",
+                json={"chat_id": chat_id, "message_id": message_id},
+                timeout=15,
+            )
+            if not resp.ok:
+                print(f"Telegram deleteMessage failed for chat {chat_id}: {resp.status_code} {resp.text[:200]}")
+        except Exception as e:
+            print(f"Telegram deleteMessage failed for chat {chat_id}: {e}")
+
+    def get_me(self) -> str:
+        """Bot username from getMe ("" on any failure — callers degrade gracefully).
+
+        Handy for building t.me/<username>?start=... deep links."""
+        try:
+            resp = requests.get(f"{self._api_base}/getMe", timeout=15)
+            return resp.json().get("result", {}).get("username", "")
+        except Exception:
+            return ""
+
     def _get_updates(self) -> requests.Response:
         """One getUpdates long-poll (30s server-side hold, 35s HTTP timeout)."""
         return requests.get(
@@ -171,8 +210,13 @@ class Bot:
         on_message: OnMessage | None = None,
         commands: dict[str, CommandHandler] | None = None,
         on_tick: OnTick | None = None,
+        on_start_payload: OnStartPayload | None = None,
     ) -> int:
         """Poll Telegram forever. Returns non-zero if the network wedges for good.
+
+        `commands` maps a lowercased command or button label ("/time",
+        "⏰ server time") to its handler — incoming text is lowercased before
+        the lookup, so keys must be lowercase.
 
         Each poll runs in a daemon thread with a hard time cap: a wedged
         connection (half-open NAT/VPN socket where the read timeout never
@@ -217,7 +261,7 @@ class Bot:
                     if not msg:
                         continue
                     try:
-                        self._handle_message(msg, on_message, commands)
+                        self._handle_message(msg, on_message, commands, on_start_payload)
                     except Exception as e:
                         print(f"Error handling message: {e}")
 
@@ -246,33 +290,57 @@ class Bot:
         msg: dict,
         on_message: OnMessage | None = None,
         commands: dict[str, CommandHandler] | None = None,
+        on_start_payload: OnStartPayload | None = None,
     ) -> None:
         chat_id = str(msg["chat"]["id"])
         raw_text = (msg.get("text") or "").strip()
         text = raw_text.lower()
+        # Slash commands are case-insensitive and may carry an argument
+        # ("/start Order_ABC-123"); the argument keeps its case — deep-link
+        # payloads are case-sensitive. Plain button texts contain spaces and
+        # must stay intact.
         # In groups Telegram clients append the bot username: "/help@MyBot" -> "/help"
-        cmd = text.split("@", 1)[0] if text.startswith("/") else text
+        if raw_text.startswith("/"):
+            base, _, arg = raw_text.partition(" ")
+            cmd = base.split("@", 1)[0].lower()
+            arg = arg.strip()
+        else:
+            cmd, arg = text, ""
 
         if not state.is_authorized(chat_id, self.authorized, self.password):
             if raw_text == self.password:
                 self.send(chat_id, state.authorize(chat_id, self.authorized, self.out_dir))
+                # Don't leave the password sitting in the chat history.
+                message_id = msg.get("message_id")
+                if message_id is not None:
+                    self.delete_message(chat_id, message_id)
             else:
                 self.send(chat_id, "🔒 This bot is protected. Send the password to authorize.")
             return
 
         if cmd in ("/start", "/help"):
-            self.send(chat_id, self.help_text)
+            if cmd == "/start" and arg and on_start_payload is not None:
+                # The client shows the user's "/start <payload>" message in the
+                # chat; delete it so deep-link clicks stay clean. Best-effort.
+                message_id = msg.get("message_id")
+                if message_id is not None:
+                    self.delete_message(chat_id, message_id)
+                on_start_payload(arg, chat_id, self)
+            else:
+                self.send(chat_id, self.help_text)
 
-        elif cmd.startswith("/subscribe") or text == "🔔 subscribe":
+        elif commands and cmd in commands:
+            # Checked before the built-in subscription handlers so an app can
+            # own the 🔔/🔕 buttons (e.g. per-source subscriptions).
+            commands[cmd](chat_id, self)
+
+        elif cmd == "/subscribe" or text == "🔔 subscribe":
             state.subscribe(chat_id, self.subscribers, self.out_dir)
             self.send(chat_id, self.subscribe_reply)
 
         elif cmd == "/unsubscribe" or text == "🔕 unsubscribe":
             state.unsubscribe(chat_id, self.subscribers, self.out_dir)
             self.send(chat_id, self.unsubscribe_reply)
-
-        elif commands and cmd in commands:
-            commands[cmd](chat_id, self)
 
         elif raw_text and on_message:
             on_message(raw_text, chat_id, self)
