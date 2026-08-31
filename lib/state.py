@@ -37,9 +37,12 @@ def load_authorized(out_dir: str | Path) -> set[str]:
     return _load_set(Path(out_dir) / "authorized.json")
 
 
-def load_subscribers(out_dir: str | Path) -> set[str]:
-    """Return the set of chat IDs that should receive broadcasts."""
-    return _load_set(Path(out_dir) / "subscribers.json")
+def load_subscribers(out_dir: str | Path, name: str = "subscribers") -> set[str]:
+    """Return the set of chat IDs that should receive broadcasts.
+
+    ``name`` selects the backing file (<name>.json), so an app can keep
+    several independent subscriber lists (e.g. one per source)."""
+    return _load_set(Path(out_dir) / f"{name}.json")
 
 
 def is_authorized(chat_id: str, authorized: set[str], bot_password: str) -> bool:
@@ -54,17 +57,17 @@ def authorize(chat_id: str, authorized: set[str], out_dir: str | Path) -> str:
     return "✅ Authorized. Use /help to see available commands."
 
 
-def subscribe(chat_id: str, subscribers: set[str], out_dir: str | Path) -> str:
+def subscribe(chat_id: str, subscribers: set[str], out_dir: str | Path, name: str = "subscribers") -> str:
     """Add the chat to the broadcast list; return the reply text."""
     if chat_id not in subscribers:
         subscribers.add(chat_id)
-        _save_set(Path(out_dir) / "subscribers.json", subscribers)
+        _save_set(Path(out_dir) / f"{name}.json", subscribers)
     return "✅ You are subscribed to broadcasts."
 
 
-def unsubscribe(chat_id: str, subscribers: set[str], out_dir: str | Path) -> str:
+def unsubscribe(chat_id: str, subscribers: set[str], out_dir: str | Path, name: str = "subscribers") -> str:
     """Remove the chat from the broadcast list; return the reply text."""
     if chat_id in subscribers:
         subscribers.discard(chat_id)
-        _save_set(Path(out_dir) / "subscribers.json", subscribers)
+        _save_set(Path(out_dir) / f"{name}.json", subscribers)
     return "✅ You are unsubscribed from broadcasts."

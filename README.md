@@ -1,15 +1,12 @@
 # tgbot-core
 
-Small reusable Telegram long-polling bot core (stdlib + `requests`), plus a
-runnable echo-bot example.
+Small reusable Telegram long-polling bot core (stdlib + `requests`), plus
+runnable example bots.
 
-## Layout
-
-- `lib/` — the package sources (imported as `tgbot` via `package-dir` in pyproject): `core.py` (`Bot` class, `load_env`), `state.py` (authorized/subscribers JSON persistence under `out/`)
-- `examples/echo_bot/` — self-contained demo bot app (same layout as sibling apps like `fonds/`): `bot.py` + `handlers.py` with its own `config/`, `deploy/`, `Dockerfile`, `docker-compose.yml` — see its [README](examples/echo_bot/README.md)
-- `examples/page_bot/` — demo bot with a 🌐 Open page button that sends a self-contained HTML/JS page (`web/index.html`) as a document via `send_document()`: `bot.py` + `handlers.py` + `web/` — see its [README](examples/page_bot/README.md)
-- `tests/` — pytest suite, all network mocked (`python -m pytest tests/`)
-- `docs/` — [architecture](docs/ARCHITECTURE.md), [telegram setup](docs/TELEGRAM.md), [deploy](docs/DOCKER.md)
+| Example | What it shows |
+| --- | --- |
+| [echo_bot](examples/echo_bot/README.md) | Self-contained demo bot app with Docker deploy |
+| [page_bot](examples/page_bot/README.md) | Sends an HTML/JS page via `send_document()` |
 
 ## Install
 
@@ -23,22 +20,24 @@ pip install -e .        # from this directory
 from tgbot import Bot
 
 # reads .env (TELEGRAM_BOT_TOKEN, BOT_PASSWORD); raises ValueError if no token
-bot = Bot.from_env(keyboard_rows=[["🔍 Check now"]])
+bot = Bot.from_env(keyboard_rows=[["ℹ️ About", "⏰ Server time"]])
 bot.run_forever(
-    commands={"/check": lambda chat_id, bot: bot.send(chat_id, "checking...")},
     on_message=lambda text, chat_id, bot: bot.send(chat_id, f"You said: {text}"),
 )
 ```
 
-Built into the package: password authorization (empty password = open access;
-unauthorized chats see only a 🔑 Authorize button), `/start` `/help`,
-`/subscribe` `/unsubscribe` with 🔔/🔕 keyboard buttons, `send_document()` for
-file reports, `"🤖 Bot started"` broadcast on startup, HTML sending chunked at
-4000 chars, and the long-poll loop with error backoff. App logic is injected
-via the `commands` / `on_message` / `on_tick` callbacks — see the docstrings
-in `tgbot/core.py` and the full example in `examples/echo_bot/`.
+| Built-in | Behavior |
+| --- | --- |
+| Authorization | Password gate; empty password = open access |
+| `/start`, `/help` | Help text; `/start <payload>` deep links go to `on_start_payload` |
+| `/subscribe`, `/unsubscribe` | Broadcast list, with 🔔/🔕 keyboard buttons |
+| `send_document()` | File reports (authorized chats only) |
+| Messaging | Startup broadcast, 4000-char chunking, long-poll with stall recovery |
 
-## Run the echo example (Docker Compose)
+App logic is injected via the `commands` / `on_message` / `on_tick` /
+`on_start_payload` callbacks — see the docstrings in `lib/core.py`.
+
+## Run an example (Docker Compose)
 
 ```bash
 cd examples/echo_bot
@@ -47,17 +46,9 @@ docker compose up -d --build
 docker compose logs -f         # should show "Polling for commands..."
 ```
 
-That's it — Compose pins the build, `.env`, restart policy and the `./out`
-state volume. Details and server deployment: [docs/DOCKER.md](docs/DOCKER.md).
-
-## Run the echo example manually (without Docker)
-
-```bash
-python -m venv venv                        # do once
-source venv/Scripts/activate               # do in every new terminal session
-pip install -e .                           # do once
-
-cd examples/echo_bot
-python bot.py                              # run the bot (Ctrl+C to stop)
-python handlers.py "hi"                    # test response logic without Telegram
-```
+| Doc | Topic |
+| --- | --- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design of the polling loop and message routing |
+| [TELEGRAM.md](docs/TELEGRAM.md) | Bot setup on the Telegram side |
+| [DOCKER.md](docs/DOCKER.md) | Server deployment |
+| [DEV.md](DEV.md) | Layout, tests, running without Docker |

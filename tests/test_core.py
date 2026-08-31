@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
 from tgbot import state
-from tgbot.core import Bot
+from tgbot.core import Bot, load_env
 
 
 class _Resp:
@@ -29,13 +30,17 @@ class RecBot(Bot):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.sent: list[tuple[str, str]] = []
+        self.deleted: list[tuple[str, int]] = []
 
     def send(self, chat_id: str, text: str) -> None:
         self.sent.append((chat_id, text))
 
+    def delete_message(self, chat_id: str, message_id: int) -> None:
+        self.deleted.append((chat_id, message_id))
 
-def _msg(text: str, chat_id: int = 123) -> dict:
-    return {"chat": {"id": chat_id}, "text": text}
+
+def _msg(text: str, chat_id: int = 123, message_id: int = 1) -> dict:
+    return {"chat": {"id": chat_id}, "text": text, "message_id": message_id}
 
 
 def _keyboard_interrupt(*a, **k):
@@ -478,6 +483,81 @@ def test_start_returns_help_text(tmp_path):
     assert bot.sent == [("123", bot.help_text)]
 
 
+# --- /start <payload> deep links ---
+
+
+def test_start_with_payload_calls_handler(tmp_path):
+    seen = []
+    bot = RecBot(token="test", out_dir=tmp_path)
+    bot._handle_message(_msg("/start order_123"),
+                        on_start_payload=lambda p, c, b: seen.append((p, c, b is bot)))
+    assert seen == [("order_123", "123", True)]
+    assert bot.sent == []  # help text NOT sent
+
+
+def test_start_without_payload_sends_help(tmp_path):
+    seen = []
+    bot = RecBot(token="test", out_dir=tmp_path)
+    bot._handle_message(_msg("/start"),
+                        on_start_payload=lambda p, c, b: seen.append(p))
+    assert bot.sent == [("123", bot.help_text)]
+    assert seen == []
+
+
+def test_start_with_payload_deletes_command_message(tmp_path):
+    bot = RecBot(token="test", out_dir=tmp_path)
+    bot._handle_message(_msg("/start order_123", message_id=42),
+                        on_start_payload=lambda p, c, b: None)
+    assert bot.deleted == [("123", 42)]
+
+
+def test_plain_start_message_is_kept(tmp_path):
+    bot = RecBot(token="test", out_dir=tmp_path)
+    bot._handle_message(_msg("/start", message_id=42),
+                        on_start_payload=lambda p, c, b: None)
+    assert bot.deleted == []
+
+
+def test_unauthorized_payload_message_is_kept(tmp_path):
+    bot = RecBot(token="test", password="secret", out_dir=tmp_path)
+    bot._handle_message(_msg("/start order_1", message_id=42),
+                        on_start_payload=lambda p, c, b: None)
+    assert bot.deleted == []
+
+
+def test_button_text_with_spaces_still_dispatches(tmp_path):
+    fired = []
+    bot = RecBot(token="test", out_dir=tmp_path)
+    commands = {"⏰ server time": lambda chat_id, b: fired.append(chat_id)}
+    bot._handle_message(_msg("⏰ Server time"), commands=commands)
+    assert fired == ["123"]
+
+
+def test_payload_dropped_for_unauthorized_chat(tmp_path):
+    seen = []
+    bot = RecBot(token="test", password="secret", out_dir=tmp_path)
+    bot._handle_message(_msg("/start order_1"),
+                        on_start_payload=lambda p, c, b: seen.append(p))
+    assert bot.sent == [("123", "🔒 This bot is protected. Send the password to authorize.")]
+    assert seen == []
+
+
+# --- get_me ---
+
+
+def test_get_me_returns_username_and_tolerates_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("tgbot.core.requests.get",
+                        lambda url, timeout: _Resp(payload={"result": {"username": "order_bot"}}))
+    bot = Bot(token="test", out_dir=tmp_path)
+    assert bot.get_me() == "order_bot"
+
+    def boom(url, timeout):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr("tgbot.core.requests.get", boom)
+    assert bot.get_me() == ""
+
+
 # --- send() failure logging ---
 
 
@@ -486,3 +566,121 @@ def test_send_logs_telegram_failure(tmp_path, monkeypatch, capsys):
     bot = Bot(token="test", out_dir=tmp_path)
     bot.send("123", "hi")
     assert "Telegram send failed for chat 123: 500" in capsys.readouterr().out
+
+
+# --- delete_message ---
+
+
+def test_delete_message_posts_and_tolerates_failure(tmp_path, monkeypatch):
+    calls = []
+
+    def ok_post(url, json, timeout):
+        calls.append((url, json))
+        return _Resp()
+
+    monkeypatch.setattr("tgbot.core.requests.post", ok_post)
+    bot = Bot(token="test", out_dir=tmp_path)
+    bot.delete_message("123", 42)
+    assert calls == [("https://api.telegram.org/bottest/deleteMessage",
+                      {"chat_id": "123", "message_id": 42})]
+
+    def boom(*a, **k):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr("tgbot.core.requests.post", boom)
+    bot.delete_message("123", 42)  # must not raise
+
+
+# --- keyboard_provider ---
+
+
+def test_keyboard_provider_supplies_rows_for_authorized_chats(tmp_path):
+    bot = Bot(token="test", password="secret", out_dir=tmp_path,
+              keyboard_provider=lambda chat_id: [["Pick a source"]])
+    assert bot._keyboard_for("123") == {"keyboard": [["🔑 Authorize"]], "resize_keyboard": True}
+    bot.authorized.add("123")
+    assert bot._keyboard_for("123") == {"keyboard": [["Pick a source"]], "resize_keyboard": True}
+
+
+def test_keyboard_provider_can_vary_per_chat(tmp_path):
+    chosen = {"123": "source_a"}
+    bot = Bot(token="test", out_dir=tmp_path,
+              keyboard_provider=lambda c: [["Source A", "Source B"]] if c not in chosen else [["⏰ Server time"]])
+    assert bot._keyboard_for("123")["keyboard"] == [["⏰ Server time"]]
+    assert bot._keyboard_for("999")["keyboard"] == [["Source A", "Source B"]]
+
+
+# --- app commands override the built-in subscribe/unsubscribe ---
+
+
+def test_app_command_overrides_builtin_subscribe(tmp_path):
+    fired = []
+    bot = RecBot(token="test", out_dir=tmp_path)
+    commands = {"🔔 subscribe": lambda chat_id, b: fired.append(chat_id)}
+    bot._handle_message(_msg("🔔 Subscribe"), commands=commands)
+    assert fired == ["123"]
+    assert bot.subscribers == set()  # built-in handler did not run
+    assert bot.sent == []
+
+
+def test_builtin_subscribe_still_works_without_app_override(tmp_path):
+    bot = RecBot(token="test", out_dir=tmp_path)
+    bot._handle_message(_msg("🔔 Subscribe"), commands={"/check": lambda c, b: None})
+    assert "123" in bot.subscribers
+
+
+# --- named subscriber sets ---
+
+
+def test_named_subscriber_sets_are_independent(tmp_path):
+    a = state.load_subscribers(tmp_path, name="subscribers_a")
+    b = state.load_subscribers(tmp_path, name="subscribers_b")
+    state.subscribe("1", a, tmp_path, name="subscribers_a")
+    assert state.load_subscribers(tmp_path, name="subscribers_a") == {"1"}
+    assert state.load_subscribers(tmp_path, name="subscribers_b") == set()
+    state.unsubscribe("1", a, tmp_path, name="subscribers_a")
+    assert state.load_subscribers(tmp_path, name="subscribers_a") == set()
+
+
+# --- code-review regression tests ---
+
+
+def test_start_payload_keeps_its_case(tmp_path):
+    """Deep-link payloads are case-sensitive; only the command is lowercased."""
+    seen = []
+    bot = RecBot(token="test", out_dir=tmp_path)
+    bot._handle_message(_msg("/start Order_ABC-123"),
+                        on_start_payload=lambda p, c, b: seen.append(p))
+    assert seen == ["Order_ABC-123"]
+
+
+def test_similar_slash_command_does_not_subscribe(tmp_path):
+    """'/subscriber' must not trigger the built-in '/subscribe' handler."""
+    seen = []
+    bot = RecBot(token="test", out_dir=tmp_path)
+    bot._handle_message(_msg("/subscriber"), on_message=lambda t, c, b: seen.append(t))
+    assert bot.subscribers == set()
+    assert seen == ["/subscriber"]  # falls through to on_message
+
+
+def test_password_message_is_deleted_after_authorizing(tmp_path):
+    """The password must not stay visible in the chat history."""
+    bot = RecBot(token="test", password="secret", out_dir=tmp_path)
+    bot._handle_message(_msg("secret", message_id=7))
+    assert "123" in bot.authorized
+    assert bot.deleted == [("123", 7)]
+
+
+def test_load_env_keeps_hash_in_values(tmp_path, monkeypatch):
+    """'#' is a comment only in ' #' form; quoted values keep everything."""
+    for name in ("TEST_PW", "TEST_QUOTED", "TEST_PLAIN"):
+        monkeypatch.delenv(name, raising=False)
+    env = tmp_path / ".env"
+    env.write_text(
+        'TEST_PW=ab#cd\nTEST_QUOTED="x # not a comment"\nTEST_PLAIN=x # comment\n',
+        encoding="utf-8",
+    )
+    load_env(str(env))
+    assert os.environ["TEST_PW"] == "ab#cd"
+    assert os.environ["TEST_QUOTED"] == "x # not a comment"
+    assert os.environ["TEST_PLAIN"] == "x"

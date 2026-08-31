@@ -5,7 +5,7 @@ as `tgbot` via `package-dir` in pyproject). `bot.py` wires
 `handlers.get_response`/`BUTTONS` into `tgbot.Bot`; `handlers.py` has no
 Telegram dependencies and can be tested standalone.
 
-Same layout as sibling bot apps (e.g. `fonds/`): app files at the top level,
+Same layout as other apps built on this package: app files at the top level,
 `config/` for the env template, `deploy/` for release packing.
 
 ## Setup
